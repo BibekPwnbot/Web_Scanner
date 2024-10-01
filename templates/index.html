@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A simple vulnerability scanner that helps you check website security.">
+    <title>Vulnerability Scanner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Website Vulnerability Scanner</h1>
+        <form action="/" method="POST" class="scanner-form">
+            <label for="url">Enter the URL:</label>
+            <input type="text" id="url" name="url" required placeholder="http://example.com/">
+            <button type="submit">Start Scan</button>
+        </form>
+        <div class="info-text">
+            <p>Ensure the security of your website by quickly scanning for potential vulnerabilities.</p>
+        </div>
+    </div>
+</body>
+</html>

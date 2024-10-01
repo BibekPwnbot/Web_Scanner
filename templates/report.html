@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vulnerability Scan Report</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Vulnerability Scan Report for {{ url }}</h1>
+
+        {% if results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Path</th>
+                    <th>Description</th>
+                    <!-- <th>Rating</th> -->
+                    <th>Severity Level</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for path, result, rating in results %}
+                <tr>
+                    <td>{{ path }}</td>  <!-- Path of the vulnerability -->
+                    <td>{{ result }}</td> <!-- Description of the vulnerability -->
+                    <!-- <td>{{ rating }}</td> Vulnerability rating -->
+                    <!-- <td class="{% if rating <= 3 %}low{% elif rating <= 6 %}medium{% else %}high{% endif %}">
+                        {% if rating <= 3 %}Low{% elif rating <= 6 %}Medium{% else %}High{% endif %}
+                    </td> -->
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No vulnerabilities detected for {{ url }}.</p>
+        {% endif %}
+
+        <a href="/">Scan Another URL</a>
+    </div>
+</body>
+</html>
