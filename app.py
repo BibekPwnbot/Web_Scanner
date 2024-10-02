@@ -9,7 +9,14 @@ import numpy as np
 import html
 from datetime import datetime
 
+# Ensure TensorFlow uses memory on-demand
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
 app = Flask(__name__)
+
 
 # Initialize the tokenizer and model globally for vulnerability classification
 tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
