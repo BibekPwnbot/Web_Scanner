@@ -311,6 +311,56 @@ def index():
     return render_template('index.html')
 
 @app.route('/report', methods=['GET'])
+# def scan_report():
+#     url = request.args.get('url')
+#     results = []
+#     responses = []
+
+#     # Perform vulnerability scans for each path
+#     for path, description in vulnerability_checks.items():
+#         full_url = url + path
+#         result = check_vulnerability(full_url, description)
+        
+#         # Only append if the check returns a vulnerable result
+#         if "[VULNERABLE]" in result:
+#             results.append((path, result, 5))  # Pass (path, result, rating)
+
+#         # Perform SQL Injection, XSS, XXE, SSRF, RCE tests
+#         sql_results = check_sql_injection(full_url)
+#         xss_results = check_xss(full_url)
+#         xxe_results = check_xxe(full_url)
+#         ssrf_results = check_ssrf(full_url)
+#         rce_results = check_rce(full_url)
+
+#         # Only add results for vulnerabilities found
+#         results.extend([(path, res, 7) for res in sql_results if "[VULNERABLE]" in res])
+#         results.extend([(path, res, 6) for res in xss_results if "[VULNERABLE]" in res])
+#         results.extend([(path, res, 4) for res in xxe_results if "[VULNERABLE]" in res])
+#         results.extend([(path, res, 8) for res in ssrf_results if "[VULNERABLE]" in res])
+#         results.extend([(path, res, 9) for res in rce_results if "[VULNERABLE]" in res])
+
+#         # Collect responses for anomaly detection
+#         try:
+#             response = requests.get(full_url, timeout=10)
+#             responses.append(response.text)
+#         except requests.RequestException:
+#             responses.append("")  # Add an empty string if request fails
+#         time.sleep(1)  # To avoid overloading the server
+
+#     # Perform brute force login attempts (only append vulnerable results)
+#     brute_force_results = brute_force_login(url, login_tests)
+#     results.extend([(url, res, 10) for res in brute_force_results if "[VULNERABLE]" in res])
+
+#     # Detect anomalies in the responses
+#     if responses:
+#         anomalies = detect_anomalies(responses)
+#         for i, is_anomaly in enumerate(anomalies):
+#             if is_anomaly == -1:  # -1 indicates an anomaly
+#                 results[i] = (results[i][0], results[i][1] + " [ANOMALOUS RESPONSE DETECTED]", results[i][2])
+
+#     # Pass only vulnerable results to the template
+#     return render_template('report.html', url=url, results=results)
+@app.route('/report', methods=['GET'])
 def scan_report():
     url = request.args.get('url')
     results = []
@@ -319,25 +369,47 @@ def scan_report():
     # Perform vulnerability scans for each path
     for path, description in vulnerability_checks.items():
         full_url = url + path
-        result = check_vulnerability(full_url, description)
+        
+        try:
+            result = check_vulnerability(full_url, description)
+        except Exception as e:
+            result = f"[ERROR] Could not check {full_url} for vulnerabilities: {e}"
+            log_vulnerability(full_url, f"Error during vulnerability check: {e}", "ERROR")
         
         # Only append if the check returns a vulnerable result
         if "[VULNERABLE]" in result:
             results.append((path, result, 5))  # Pass (path, result, rating)
 
         # Perform SQL Injection, XSS, XXE, SSRF, RCE tests
-        sql_results = check_sql_injection(full_url)
-        xss_results = check_xss(full_url)
-        xxe_results = check_xxe(full_url)
-        ssrf_results = check_ssrf(full_url)
-        rce_results = check_rce(full_url)
+        try:
+            sql_results = check_sql_injection(full_url)
+            results.extend([(path, res, 7) for res in sql_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during SQL Injection check: {e}", "ERROR")
 
-        # Only add results for vulnerabilities found
-        results.extend([(path, res, 7) for res in sql_results if "[VULNERABLE]" in res])
-        results.extend([(path, res, 6) for res in xss_results if "[VULNERABLE]" in res])
-        results.extend([(path, res, 4) for res in xxe_results if "[VULNERABLE]" in res])
-        results.extend([(path, res, 8) for res in ssrf_results if "[VULNERABLE]" in res])
-        results.extend([(path, res, 9) for res in rce_results if "[VULNERABLE]" in res])
+        try:
+            xss_results = check_xss(full_url)
+            results.extend([(path, res, 6) for res in xss_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during XSS check: {e}", "ERROR")
+        
+        try:
+            xxe_results = check_xxe(full_url)
+            results.extend([(path, res, 4) for res in xxe_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during XXE check: {e}", "ERROR")
+        
+        try:
+            ssrf_results = check_ssrf(full_url)
+            results.extend([(path, res, 8) for res in ssrf_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during SSRF check: {e}", "ERROR")
+        
+        try:
+            rce_results = check_rce(full_url)
+            results.extend([(path, res, 9) for res in rce_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during RCE check: {e}", "ERROR")
 
         # Collect responses for anomaly detection
         try:
@@ -348,18 +420,26 @@ def scan_report():
         time.sleep(1)  # To avoid overloading the server
 
     # Perform brute force login attempts (only append vulnerable results)
-    brute_force_results = brute_force_login(url, login_tests)
-    results.extend([(url, res, 10) for res in brute_force_results if "[VULNERABLE]" in res])
+    try:
+        brute_force_results = brute_force_login(url, login_tests)
+        results.extend([(url, res, 10) for res in brute_force_results if "[VULNERABLE]" in res])
+    except Exception as e:
+        log_vulnerability(url, f"Error during brute force check: {e}", "ERROR")
 
     # Detect anomalies in the responses
     if responses:
-        anomalies = detect_anomalies(responses)
-        for i, is_anomaly in enumerate(anomalies):
-            if is_anomaly == -1:  # -1 indicates an anomaly
-                results[i] = (results[i][0], results[i][1] + " [ANOMALOUS RESPONSE DETECTED]", results[i][2])
+        try:
+            anomalies = detect_anomalies(responses)
+            for i, is_anomaly in enumerate(anomalies):
+                if is_anomaly == -1:  # -1 indicates an anomaly
+                    results[i] = (results[i][0], results[i][1] + " [ANOMALOUS RESPONSE DETECTED]", results[i][2])
+        except Exception as e:
+            log_vulnerability(url, f"Error during anomaly detection: {e}", "ERROR")
 
     # Pass only vulnerable results to the template
     return render_template('report.html', url=url, results=results)
 
+
 if __name__ == "__main__":
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        #app.run(debug=True)
+        pass
