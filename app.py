@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, make_response
 import requests
 import time
 import os
@@ -8,6 +8,9 @@ import tensorflow as tf
 import numpy as np
 import html
 from datetime import datetime
+import pdfkit
+import aiohttp
+import asyncio
 
 # Ensure TensorFlow uses memory on-demand
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -16,7 +19,6 @@ if gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
 
 app = Flask(__name__)
-
 
 # Initialize the tokenizer and model globally for vulnerability classification
 tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
@@ -46,9 +48,7 @@ xss_tests = ["<script>alert('XSS')</script>", "<img src=x onerror=alert('XSS') /
 xxe_payloads = ["<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?> <!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]>"]
 ssrf_payloads = ['http://localhost', 'http://127.0.0.1', 'http://169.254.169.254/latest/meta-data/']
 rce_payloads = ['phpinfo()', 'system("ls")', 'system("cat /etc/passwd")']
-access_control_tests = ["/admin", "/admin/config.php", "/admin/backup", "/admin/.git", "/admin/.env", "/admin/users.php"]
-security_misconfigurations = ["/server-status", "/server-info", "/.git/", "/phpinfo.php", "/backup.sql"]
-# List of common username and password combinations for brute-force attack
+
 login_tests = [
     ('admin', 'password'),  
     ('admin', 'admin'),  
@@ -61,21 +61,19 @@ login_tests = [
     ('guest', 'guest'),  
     ('root', 'root')
 ]
-# List of XSS payloads designed for different contexts and bypassing filters
+
 xss_payloads = [
-    "<script>alert('XSS')</script>",                        # Basic script injection
-    "<img src=x onerror=alert('XSS') />",                   # XSS in image tag
-    "<svg/onload=alert('XSS')>",                            # XSS in SVG element
-    "<body onload=alert('XSS')>",                           # XSS in body onload
-    "';alert('XSS');//",                                    # XSS with single quote and comment bypass
-    "<iframe src=javascript:alert('XSS')>",                 # XSS in iframe tag
-    "<input type='text' onfocus='alert(1)' autofocus>",     # XSS in input element with focus event
-    "<div onmouseover='alert(\"XSS\")'>Hover me!</div>",    # XSS in div tag with mouseover event
-    "javascript:alert('XSS')",                              # XSS in href attribute (href="javascript:...")
-    "'';!--\"<XSS>=&{()}",                                  # Obfuscated XSS payload
+    "<script>alert('XSS')</script>",                        
+    "<img src=x onerror=alert('XSS') />",                   
+    "<svg/onload=alert('XSS')>",                            
+    "<body onload=alert('XSS')>",                           
+    "';alert('XSS');//",                                    
+    "<iframe src=javascript:alert('XSS')>",                 
+    "<input type='text' onfocus='alert(1)' autofocus>",     
+    "<div onmouseover='alert(\"XSS\")'>Hover me!</div>",    
+    "javascript:alert('XSS')",                              
+    "'';!--\"<XSS>=&{()}",                                  
 ]
-
-
 
 # Function to classify vulnerability using the pre-trained model
 def classify_vulnerability(text):
@@ -89,6 +87,16 @@ def detect_anomalies(responses):
     X = vectorizer.transform(responses)
     anomalies = anomaly_model.predict(X)
     return anomalies
+
+# Add asynchronous fetching with aiohttp
+async def fetch_url(session, url):
+    async with session.get(url) as response:
+        return await response.text()
+
+async def scan_urls(urls):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_url(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
 
 # Function to check if a URL is vulnerable
 def check_vulnerability(url, description):
@@ -112,32 +120,70 @@ def check_vulnerability(url, description):
     
     return result
 
-# Function to check for SQL injection and XSS vulnerabilities
-def check_input_vulnerabilities(url):
-    for test in sql_injection_tests:
-        try:
-            response = requests.get(f"{url}?test={test}", timeout=10)
-            if "SQL" in response.text or "syntax" in response.text:
-                result = f"[VULNERABLE] SQL Injection possible at: {url} with payload: {test}"
-                log_vulnerability(url, f"SQL Injection possible with payload: {test}", "CRITICAL")
-                print(result)
-        except requests.RequestException as e:
-            result = f"[ERROR] Error checking for SQL Injection at {url}: {e}"
-            log_vulnerability(url, f"SQL Injection check error: {e}", "ERROR")
-            print(result)
+# Function to log vulnerabilities to an HTML file
+def log_vulnerability(url, message, level):
+    with open("vulnerability_report.html", "a") as log_file:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        css_class = level.lower()
+        escaped_message = html.escape(message)
+        log_file.write(f"<tr class='{css_class}'><td>{timestamp}</td><td>{level}</td><td>{url}</td><td>{escaped_message}</td></tr>\n")
+# def check_input_vulnerabilities(url):
+#     for test in sql_injection_tests:
+#         try:
+#             response = requests.get(f"{url}?test={test}", timeout=10)
+#             if "SQL" in response.text or "syntax" in response.text:
+#                 result = f"[VULNERABLE] SQL Injection possible at: {url} with payload: {test}"
+#                 log_vulnerability(url, f"SQL Injection possible with payload: {test}", "CRITICAL")
+#                 print(result)
+#         except requests.RequestException as e:
+#             result = f"[ERROR] Error checking for SQL Injection at {url}: {e}"
+#             log_vulnerability(url, f"SQL Injection check error: {e}", "ERROR")
+#             print(result)
 
-    for test in xss_tests:
-        try:
-            response = requests.get(f"{url}?test={test}", timeout=10)
-            if "<script>" in response.text or "alert('XSS')" in response.text:
-                escaped_test = html.escape(test)
-                result = f"[VULNERABLE] XSS possible at: {url} with payload: {escaped_test}"
-                log_vulnerability(url, f"XSS possible with payload: {escaped_test}", "CRITICAL")
-                print(result)
-        except requests.RequestException as e:
-            result = f"[ERROR] Error checking for XSS at {url}: {e}"
-            log_vulnerability(url, f"XSS check error: {e}", "ERROR")
-            print(result)
+#     for test in xss_tests:
+#         try:
+#             response = requests.get(f"{url}?test={test}", timeout=10)
+#             if "<script>" in response.text or "alert('XSS')" in response.text:
+#                 escaped_test = html.escape(test)
+#                 result = f"[VULNERABLE] XSS possible at: {url} with payload: {escaped_test}"
+#                 log_vulnerability(url, f"XSS possible with payload: {escaped_test}", "CRITICAL")
+#                 print(result)
+#         except requests.RequestException as e:
+#             result = f"[ERROR] Error checking for XSS at {url}: {e}"
+#             log_vulnerability(url, f"XSS check error: {e}", "ERROR")
+#             print(result)
+# Enhanced function to check for vulnerabilities
+def check_vulnerability(url, description):
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            content = response.text
+            # Use the pre-trained model to classify the vulnerability
+            vulnerability_scores = classify_vulnerability(content)
+            vulnerability_type = ["SQL Injection", "XSS", "CSRF", "RCE", "Other"][np.argmax(vulnerability_scores)]
+            confidence = np.max(vulnerability_scores)
+
+            # If the confidence is below a certain threshold, mark as safe
+            if confidence < 0.5:
+                result = f"[SAFE] {url} - No significant vulnerabilities detected. (Confidence: {confidence:.2f})"
+                log_vulnerability(url, f"No significant vulnerabilities detected. (Confidence: {confidence:.2f})", "SAFE")
+            else:
+                result = f"[VULNERABLE] {url} - {description} (Type: {vulnerability_type}, Confidence: {confidence:.2f})"
+                log_vulnerability(url, f"{description} (Type: {vulnerability_type}, Confidence: {confidence:.2f})", "CRITICAL")
+        elif response.status_code == 403:
+            result = f"[INFO] Access denied at: {url} (403 Forbidden)"
+            log_vulnerability(url, "Access denied (403 Forbidden)", "INFO")
+        elif response.status_code == 404:
+            result = f"[INFO] Not found: {url} (404 Not Found)"
+            log_vulnerability(url, "Not found (404 Not Found)", "INFO")
+        else:
+            result = f"[INFO] Unexpected status code {response.status_code} at: {url}"
+            log_vulnerability(url, f"Unexpected status code {response.status_code}", "INFO")
+        print(result)
+    except requests.RequestException as e:
+        result = f"[ERROR] Error checking {url}: {e}"
+        log_vulnerability(url, f"Request error: {e}", "ERROR")
+        print(result)
 
 # Function to check for SQL injection vulnerabilities
 def check_sql_injection(url):
@@ -294,15 +340,6 @@ def brute_force_login(url, login_tests):
     
     return results
 
-
-# Function to log vulnerabilities to an HTML file
-def log_vulnerability(url, message, level):
-    with open("vulnerability_report.html", "a") as log_file:
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        css_class = level.lower()
-        escaped_message = html.escape(message)
-        log_file.write(f"<tr class='{css_class}'><td>{timestamp}</td><td>{level}</td><td>{url}</td><td>{escaped_message}</td></tr>\n")
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -310,34 +347,232 @@ def index():
         return redirect(url_for('scan_report', url=url))
     return render_template('index.html')
 
-@app.route('/report', methods=['GET'])
+# @app.route('/report', methods=['GET'])
 # def scan_report():
 #     url = request.args.get('url')
 #     results = []
 #     responses = []
 
+#     # Build the URLs to check for vulnerabilities
+#     urls_to_check = [url + path for path in vulnerability_checks.keys()]
+
+#     # Use asyncio to perform the asynchronous fetching of URLs
+#     try:
+#         loop = asyncio.new_event_loop()
+#         asyncio.set_event_loop(loop)
+#         fetched_responses = loop.run_until_complete(scan_urls(urls_to_check))
+#     except Exception as e:
+#         print(f"Error while fetching URLs asynchronously: {e}")
+#         fetched_responses = []
+
+#     # Analyze responses and perform vulnerability checks
+#     for full_url, response in zip(urls_to_check, fetched_responses):
+#         if response is not None:
+#             try:
+#                 # Perform the vulnerability classification on the response content
+#                 vulnerability_scores = classify_vulnerability(response)
+#                 vulnerability_type = ["SQL Injection", "XSS", "CSRF", "RCE", "Other"][np.argmax(vulnerability_scores)]
+#                 confidence = np.max(vulnerability_scores)
+#                 result = f"[VULNERABLE] {full_url} - {vulnerability_checks[full_url.replace(url, '')]} (Type: {vulnerability_type}, Confidence: {confidence:.2f})"
+#                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+#                 level = "CRITICAL" if "VULNERABLE" in result else "INFO"
+#                 results.append((timestamp, level, full_url, result))
+#             except Exception as e:
+#                 # Capture error during vulnerability analysis
+#                 results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during analysis: {e}"))
+#         else:
+#             # If the response is None, it means the request failed
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, "Failed to fetch the URL"))
+
+#     # Additional vulnerability checks for SQL Injection, XSS, etc.
+#     for path, description in vulnerability_checks.items():
+#         full_url = url + path
+#         try:
+#             sql_results = check_sql_injection(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in sql_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during SQL Injection check: {e}", "ERROR")
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during SQL Injection check: {e}"))
+
+#         try:
+#             xss_results = check_xss(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xss_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during XSS check: {e}", "ERROR")
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during XSS check: {e}"))
+
+#         try:
+#             xxe_results = check_xxe(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xxe_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during XXE check: {e}", "ERROR")
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during XXE check: {e}"))
+
+#         try:
+#             ssrf_results = check_ssrf(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in ssrf_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during SSRF check: {e}", "ERROR")
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during SSRF check: {e}"))
+
+#         try:
+#             rce_results = check_rce(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in rce_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during RCE check: {e}", "ERROR")
+#             results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during RCE check: {e}"))
+
+#     # Perform brute force login attempts (only append vulnerable results)
+#     try:
+#         brute_force_results = brute_force_login(url, login_tests)
+#         results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", url, res) for res in brute_force_results if "[VULNERABLE]" in res])
+#     except Exception as e:
+#         log_vulnerability(url, f"Error during brute force check: {e}", "ERROR")
+#         results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", url, f"Error during brute force check: {e}"))
+
+#     # Pass all results (including failed checks) to the template
+#     return render_template('report.html', url=url, results=results)
+
+@app.route('/report', methods=['GET'])
+def scan_report():
+    url = request.args.get('url')
+    results = []
+    responses = []
+
+    # Build the URLs to check for vulnerabilities
+    urls_to_check = [url + path for path in vulnerability_checks.keys()]
+
+    # Use asyncio to perform the asynchronous fetching of URLs
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        fetched_responses = loop.run_until_complete(scan_urls(urls_to_check))
+    except Exception as e:
+        print(f"Error while fetching URLs asynchronously: {e}")
+        fetched_responses = []
+
+    # Analyze responses and perform vulnerability checks
+    for full_url, response in zip(urls_to_check, fetched_responses):
+        if response is not None:
+            try:
+                # Perform the vulnerability classification on the response content
+                vulnerability_scores = classify_vulnerability(response)
+                vulnerability_type = ["SQL Injection", "XSS", "CSRF", "RCE", "Other"][np.argmax(vulnerability_scores)]
+                confidence = np.max(vulnerability_scores)
+                result = f"[VULNERABLE] {full_url} - {vulnerability_checks[full_url.replace(url, '')]} (Type: {vulnerability_type}, Confidence: {confidence:.2f})"
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                level = "CRITICAL" if "VULNERABLE" in result else "INFO"
+                results.append((timestamp, level, full_url, result))
+            except Exception as e:
+                # Capture error during vulnerability analysis
+                results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during analysis: {e}"))
+        else:
+            # If the response is None, it means the request failed
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "FAILED", full_url, "Failed to fetch the URL"))
+
+    # Additional vulnerability checks for SQL Injection, XSS, etc.
+    for path, description in vulnerability_checks.items():
+        full_url = url + path
+        try:
+            sql_results = check_sql_injection(full_url)
+            results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in sql_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during SQL Injection check: {e}", "ERROR")
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during SQL Injection check: {e}"))
+
+        try:
+            xss_results = check_xss(full_url)
+            results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xss_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during XSS check: {e}", "ERROR")
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during XSS check: {e}"))
+
+        try:
+            xxe_results = check_xxe(full_url)
+            results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xxe_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during XXE check: {e}", "ERROR")
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during XXE check: {e}"))
+
+        try:
+            ssrf_results = check_ssrf(full_url)
+            results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in ssrf_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during SSRF check: {e}", "ERROR")
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during SSRF check: {e}"))
+
+        try:
+            rce_results = check_rce(full_url)
+            results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in rce_results if "[VULNERABLE]" in res])
+        except Exception as e:
+            log_vulnerability(full_url, f"Error during RCE check: {e}", "ERROR")
+            results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", full_url, f"Error during RCE check: {e}"))
+
+    # Perform brute force login attempts (only append vulnerable results)
+    try:
+        brute_force_results = brute_force_login(url, login_tests)
+        results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", url, res) for res in brute_force_results if "[VULNERABLE]" in res])
+    except Exception as e:
+        log_vulnerability(url, f"Error during brute force check: {e}", "ERROR")
+        results.append((datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "ERROR", url, f"Error during brute force check: {e}"))
+
+    # Pass all results (including failed checks) to the template
+    return render_template('report.html', url=url, results=results)
+
+# def scan_report():
+#     url = request.args.get('url')
+#     results = []
+#     responses = []
+
+#     # Build the URLs to check for vulnerabilities
+#     urls_to_check = [url + path for path in vulnerability_checks.keys()]
+
 #     # Perform vulnerability scans for each path
 #     for path, description in vulnerability_checks.items():
 #         full_url = url + path
-#         result = check_vulnerability(full_url, description)
+#         try:
+#             result = check_vulnerability(full_url, description)
+#         except Exception as e:
+#             result = f"[ERROR] Could not check {full_url} for vulnerabilities: {e}"
+#             log_vulnerability(full_url, f"Error during vulnerability check: {e}", "ERROR")
         
 #         # Only append if the check returns a vulnerable result
 #         if "[VULNERABLE]" in result:
-#             results.append((path, result, 5))  # Pass (path, result, rating)
+#             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+#             level = "CRITICAL" if "VULNERABLE" in result else "INFO"
+#             message = result
+#             results.append((timestamp, level, full_url, message))
 
 #         # Perform SQL Injection, XSS, XXE, SSRF, RCE tests
-#         sql_results = check_sql_injection(full_url)
-#         xss_results = check_xss(full_url)
-#         xxe_results = check_xxe(full_url)
-#         ssrf_results = check_ssrf(full_url)
-#         rce_results = check_rce(full_url)
+#         try:
+#             sql_results = check_sql_injection(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in sql_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during SQL Injection check: {e}", "ERROR")
 
-#         # Only add results for vulnerabilities found
-#         results.extend([(path, res, 7) for res in sql_results if "[VULNERABLE]" in res])
-#         results.extend([(path, res, 6) for res in xss_results if "[VULNERABLE]" in res])
-#         results.extend([(path, res, 4) for res in xxe_results if "[VULNERABLE]" in res])
-#         results.extend([(path, res, 8) for res in ssrf_results if "[VULNERABLE]" in res])
-#         results.extend([(path, res, 9) for res in rce_results if "[VULNERABLE]" in res])
+#         try:
+#             xss_results = check_xss(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xss_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during XSS check: {e}", "ERROR")
+        
+#         try:
+#             xxe_results = check_xxe(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in xxe_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during XXE check: {e}", "ERROR")
+        
+#         try:
+#             ssrf_results = check_ssrf(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in ssrf_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during SSRF check: {e}", "ERROR")
+        
+#         try:
+#             rce_results = check_rce(full_url)
+#             results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", full_url, res) for res in rce_results if "[VULNERABLE]" in res])
+#         except Exception as e:
+#             log_vulnerability(full_url, f"Error during RCE check: {e}", "ERROR")
 
 #         # Collect responses for anomaly detection
 #         try:
@@ -348,98 +583,48 @@ def index():
 #         time.sleep(1)  # To avoid overloading the server
 
 #     # Perform brute force login attempts (only append vulnerable results)
-#     brute_force_results = brute_force_login(url, login_tests)
-#     results.extend([(url, res, 10) for res in brute_force_results if "[VULNERABLE]" in res])
+#     try:
+#         brute_force_results = brute_force_login(url, login_tests)
+#         results.extend([(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), "CRITICAL", url, res) for res in brute_force_results if "[VULNERABLE]" in res])
+#     except Exception as e:
+#         log_vulnerability(url, f"Error during brute force check: {e}", "ERROR")
 
 #     # Detect anomalies in the responses
 #     if responses:
-#         anomalies = detect_anomalies(responses)
-#         for i, is_anomaly in enumerate(anomalies):
-#             if is_anomaly == -1:  # -1 indicates an anomaly
-#                 results[i] = (results[i][0], results[i][1] + " [ANOMALOUS RESPONSE DETECTED]", results[i][2])
+#         try:
+#             anomalies = detect_anomalies(responses)
+#             for i, is_anomaly in enumerate(anomalies):
+#                 if is_anomaly == -1:  # -1 indicates an anomaly
+#                     results[i] = (results[i][0], results[i][1], results[i][2], results[i][3] + " [ANOMALOUS RESPONSE DETECTED]")
+#         except Exception as e:
+#             log_vulnerability(url, f"Error during anomaly detection: {e}", "ERROR")
 
 #     # Pass only vulnerable results to the template
 #     return render_template('report.html', url=url, results=results)
-@app.route('/report', methods=['GET'])
-def scan_report():
+
+
+# PDF generation route
+@app.route('/download_pdf', methods=['GET'])
+def download_pdf():
     url = request.args.get('url')
-    results = []
-    responses = []
+    
+    # Sample results data, replace with actual results from the scan
+    results = [
+        ("2024-09-04 14:43:28", "INFO", "http://example.com", "Sample Message: No vulnerabilities detected."),
+        ("2024-09-04 14:43:29", "CRITICAL", "http://example.com/wp-login.php", "Sample Message: Vulnerability Detected.")
+    ]
 
-    # Perform vulnerability scans for each path
-    for path, description in vulnerability_checks.items():
-        full_url = url + path
-        
-        try:
-            result = check_vulnerability(full_url, description)
-        except Exception as e:
-            result = f"[ERROR] Could not check {full_url} for vulnerabilities: {e}"
-            log_vulnerability(full_url, f"Error during vulnerability check: {e}", "ERROR")
-        
-        # Only append if the check returns a vulnerable result
-        if "[VULNERABLE]" in result:
-            results.append((path, result, 5))  # Pass (path, result, rating)
+    rendered = render_template('report.html', url=url, results=results)
 
-        # Perform SQL Injection, XSS, XXE, SSRF, RCE tests
-        try:
-            sql_results = check_sql_injection(full_url)
-            results.extend([(path, res, 7) for res in sql_results if "[VULNERABLE]" in res])
-        except Exception as e:
-            log_vulnerability(full_url, f"Error during SQL Injection check: {e}", "ERROR")
+    # Convert the HTML to PDF
+    pdf = pdfkit.from_string(rendered, False)
 
-        try:
-            xss_results = check_xss(full_url)
-            results.extend([(path, res, 6) for res in xss_results if "[VULNERABLE]" in res])
-        except Exception as e:
-            log_vulnerability(full_url, f"Error during XSS check: {e}", "ERROR")
-        
-        try:
-            xxe_results = check_xxe(full_url)
-            results.extend([(path, res, 4) for res in xxe_results if "[VULNERABLE]" in res])
-        except Exception as e:
-            log_vulnerability(full_url, f"Error during XXE check: {e}", "ERROR")
-        
-        try:
-            ssrf_results = check_ssrf(full_url)
-            results.extend([(path, res, 8) for res in ssrf_results if "[VULNERABLE]" in res])
-        except Exception as e:
-            log_vulnerability(full_url, f"Error during SSRF check: {e}", "ERROR")
-        
-        try:
-            rce_results = check_rce(full_url)
-            results.extend([(path, res, 9) for res in rce_results if "[VULNERABLE]" in res])
-        except Exception as e:
-            log_vulnerability(full_url, f"Error during RCE check: {e}", "ERROR")
+    # Send the PDF as a downloadable file
+    response = make_response(pdf)
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Disposition'] = 'attachment; filename=scan_report.pdf'
 
-        # Collect responses for anomaly detection
-        try:
-            response = requests.get(full_url, timeout=10)
-            responses.append(response.text)
-        except requests.RequestException:
-            responses.append("")  # Add an empty string if request fails
-        time.sleep(1)  # To avoid overloading the server
-
-    # Perform brute force login attempts (only append vulnerable results)
-    try:
-        brute_force_results = brute_force_login(url, login_tests)
-        results.extend([(url, res, 10) for res in brute_force_results if "[VULNERABLE]" in res])
-    except Exception as e:
-        log_vulnerability(url, f"Error during brute force check: {e}", "ERROR")
-
-    # Detect anomalies in the responses
-    if responses:
-        try:
-            anomalies = detect_anomalies(responses)
-            for i, is_anomaly in enumerate(anomalies):
-                if is_anomaly == -1:  # -1 indicates an anomaly
-                    results[i] = (results[i][0], results[i][1] + " [ANOMALOUS RESPONSE DETECTED]", results[i][2])
-        except Exception as e:
-            log_vulnerability(url, f"Error during anomaly detection: {e}", "ERROR")
-
-    # Pass only vulnerable results to the template
-    return render_template('report.html', url=url, results=results)
-
+    return response
 
 if __name__ == "__main__":
-        #app.run(debug=True)
-        pass
+    app.run(debug=True)

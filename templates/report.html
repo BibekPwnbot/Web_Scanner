@@ -5,6 +5,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vulnerability Scan Report</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .critical {
+            color: red;
+            font-weight: bold;
+        }
+        .info {
+            color: blue;
+        }
+        .error {
+            color: orange;
+        }
+        .failed {
+            color: gray;
+            font-style: italic;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            margin-top: 20px;
+            background-color: #007bff;
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -14,21 +54,19 @@
         <table>
             <thead>
                 <tr>
-                    <th>Path</th>
-                    <th>Description</th>
-                    <!-- <th>Rating</th> -->
-                    <th>Severity Level</th>
+                    <th>Timestamp</th>
+                    <th>Level</th>
+                    <th>URL</th>
+                    <th>Message</th>
                 </tr>
             </thead>
             <tbody>
-                {% for path, result, rating in results %}
-                <tr>
-                    <td>{{ path }}</td>  <!-- Path of the vulnerability -->
-                    <td>{{ result }}</td> <!-- Description of the vulnerability -->
-                    <!-- <td>{{ rating }}</td> Vulnerability rating -->
-                    <!-- <td class="{% if rating <= 3 %}low{% elif rating <= 6 %}medium{% else %}high{% endif %}">
-                        {% if rating <= 3 %}Low{% elif rating <= 6 %}Medium{% else %}High{% endif %}
-                    </td> -->
+                {% for result in results %}
+                <tr class="{% if result[1] == 'CRITICAL' %}critical{% elif result[1] == 'ERROR' %}error{% elif result[1] == 'FAILED' %}failed{% else %}info{% endif %}">
+                    <td>{{ result[0] if result|length > 0 else "N/A" }}</td> <!-- Timestamp -->
+                    <td>{{ result[1] if result|length > 1 else "N/A" }}</td> <!-- Level -->
+                    <td>{{ result[2] if result|length > 2 else "N/A" }}</td> <!-- URL -->
+                    <td>{{ result[3] if result|length > 3 else "N/A" }}</td> <!-- Message -->
                 </tr>
                 {% endfor %}
             </tbody>
@@ -37,7 +75,11 @@
         <p>No vulnerabilities detected for {{ url }}.</p>
         {% endif %}
 
-        <a href="/">Scan Another URL</a>
+        <!-- Scan Another URL Button -->
+        <a href="/" class="btn">Scan Another URL</a>
+
+        <!-- Download PDF Button -->
+        <a href="/download_pdf?url={{ url }}" class="btn btn-primary" download="scan_report.pdf">Download Report as PDF</a>
     </div>
 </body>
 </html>
